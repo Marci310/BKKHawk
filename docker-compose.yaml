@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  dwh_postgres:
+    image: postgres:14
+    container_name: dwh_postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - BKK_API_KEY=${BKK_API_KEY}
+      - PIRATE_WEATHER_API_KEY=${PIRATE_WEATHER_API_KEY}
+      - HOLIDAY_API_KEY=${HOLIDAY_API_KEY}
+      - TZ=Europe/Budapest
+    ports:
+      - "5433:5432" # A DWH-t a host 5433-as portján éred el
+    volumes:
+      - dwh_data:/var/lib/postgresql/data
+    restart: always
+
+  # Airflow-nak szánt meta-adatbázis (ez NEM a mi DWH-nk)
+  postgres:
+    image: postgres:14
+    container_name: airflow_db
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    restart: always
+
+  airflow-python:
+    build: .
+    container_name: airflow_python
+    profiles:
+      - debug
+    depends_on:
+      - postgres
+      - dwh_postgres
+    env_file:
+      - .env
+    environment:
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      - AIRFLOW_CONN_BKK_DWH=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@dwh_postgres:5432/${POSTGRES_DB}
+      - AIRFLOW_VAR_BKK_API_KEY=${BKK_API_KEY}
+      - AIRFLOW_VAR_PIRATE_WEATHER_API_KEY=${PIRATE_WEATHER_API_KEY}
+      - AIRFLOW_VAR_HOLIDAY_API_KEY=${HOLIDAY_API_KEY}
+      - AIRFLOW_VAR_DATA_RETENTION_DAYS=${DATA_RETENTION_DAYS}
+    volumes:
+      - ./dags:/opt/airflow/dags
+    user: "50000:0"
+    entrypoint: [ "/bin/bash", "-c" ]
+    command: "sleep infinity"  # Keep container running for debugging
+    stdin_open: true
+    tty: true
+
+  # Az Airflow Scheduler
+  airflow-scheduler:
+    build: . # A mi egyedi Dockerfile-unkat használja
+    container_name: airflow_scheduler
+    depends_on:
+      - postgres
+      - dwh_postgres
+    env_file:
+      - .env
+    environment:
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      # Ez a kulcs! Létrehozunk egy "Connection"-t az Airflow UI-ban
+      # a DWH-hoz, hogy a DAG-ek hivatkozhassanak rá "bkk_dwh_conn" néven.
+      - AIRFLOW_CONN_BKK_DWH=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@dwh_postgres:5432/${POSTGRES_DB}
+      - AIRFLOW_VAR_BKK_API_KEY=${BKK_API_KEY}
+      - AIRFLOW_VAR_PIRATE_WEATHER_API_KEY=${PIRATE_WEATHER_API_KEY}
+      - AIRFLOW_VAR_HOLIDAY_API_KEY=${HOLIDAY_API_KEY}
+      - AIRFLOW_VAR_DATA_RETENTION_DAYS=${DATA_RETENTION_DAYS}
+      - AIRFLOW__WEBSERVER__SHOW_TRIGGER_FORM_IF_NO_PARAMS=True
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./models:/opt/airflow/models
+    command: scheduler
+    restart: always
+
+  # Az Airflow Web UI
+  airflow-webserver:
+    build: . # A mi egyedi Dockerfile-unkat használja
+    container_name: airflow_webserver
+    depends_on:
+      - airflow-scheduler
+    env_file:
+      - .env
+    environment:
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      - AIRFLOW_CONN_BKK_DWH=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@dwh_postgres:5432/${POSTGRES_DB}
+      - AIRFLOW_VAR_BKK_API_KEY=${BKK_API_KEY}
+      - AIRFLOW_VAR_PIRATE_WEATHER_API_KEY=${PIRATE_WEATHER_API_KEY}
+      - AIRFLOW_VAR_HOLIDAY_API_KEY=${HOLIDAY_API_KEY}
+      - AIRFLOW_VAR_DATA_RETENTION_DAYS=${DATA_RETENTION_DAYS}
+      - AIRFLOW__WEBSERVER__SHOW_TRIGGER_FORM_IF_NO_PARAMS=True
+    ports:
+      - "8080:8080"
+    command: webserver
+    restart: always
+
+  # Egyszer lefutó container, ami inicializálja az Airflow adatbázist
+  airflow-init:
+    build: .
+    container_name: airflow_init
+    depends_on:
+      - postgres
+      - dwh_postgres
+    env_file:
+      - .env
+    environment:
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    command: >
+      bash -c "
+        airflow db init &&
+        airflow users create --username admin --password admin --firstname BKK --lastname Admin --role Admin --email admin@example.com
+      "
+
+volumes:
+  dwh_data:
+  airflow_db_data:

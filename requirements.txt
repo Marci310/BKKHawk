@@ -1,0 +1,13 @@
+pandas
+requests
+psycopg2-binary
+sqlalchemy
+gtfs-realtime-bindings
+protobuf
+apache-airflow
+postgres
+pytz
+prophet
+tensorflow
+joblib
+scikit-learn
